@@ -5,13 +5,14 @@
 """
 
 import json
-import random
-from datetime import datetime
 from functools import cache
 from pathlib import Path
 
+from app.config import api_error_message
+
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 MAX_RESULTS = 3
+
 
 @cache
 def load_glossary() -> list[dict]:
@@ -79,50 +80,49 @@ def get_lecture_summary(lecture: int) -> str:
         return f"第{lecture}回の要点はまだありません。用意されている回: {', '.join(available)}"
     return path.read_text(encoding="utf-8")
 
-def make_quiz(lecture: int) -> str:
-    """指定された回の用語集から確認問題を1問作成する。
 
-    「第2回の確認問題を出して」など、利用者が
-    講義内容の理解度を確認したいときに使う。
-    lecture には講義の回数を整数で指定する。
+def search_materials(query: str) -> str:
+    """第1〜3回の本講義資料を検索し、関連ページの本文・タイトル・ページ番号を返す。
+
+    queryに調べたい内容を指定する。
     """
-     
-    glossary = load_glossary()
+    from google.genai.errors import APIError
+    import sqlite3
+    from app.retrieval import search
 
-    terms = [
-        entry for entry in glossary
-        if entry["lecture"] == lecture
-    ]
+    try:
+        return json.dumps({"results": search(query)}, ensure_ascii=False)
+    except (ValueError, FileNotFoundError, sqlite3.Error) as e:
+        return json.dumps({"error": str(e), "results": []}, ensure_ascii=False)
+    except APIError as e:
+        return json.dumps({"error": api_error_message(e.code), "results": []}, ensure_ascii=False)
 
-    if not terms:
-        return f"第{lecture}回の確認問題はありません。"
 
-    selected = random.choice(terms)
+def browse_tree(node_id: str | None = None) -> str:
+    """目次とページの先頭文を返す。ページIDを指定すると全文を返す。
 
-    return json.dumps(
-        {
-            "question": f"「{selected['term']}」の意味は？",
-            "answer": selected["definition"],
-        },
-        ensure_ascii=False,
-    )
-
-def save_learning_log(content: str) -> str:
-    """学習した内容をlearning_logフォルダに保存する。
-
-    利用者が学習内容の記録を求めたときに使う。
-    保存前には必ず利用者の承認が必要。
-    contentには保存する学習内容を入れる。
+    最初はnode_idを省略する。続いて返されたIDを指定して目次をたどる。
     """
-    if not content.strip():
-        return "保存内容が空なので保存しませんでした。"
+    from app.retrieval import browse_tree as browse
 
-    log_dir = DATA_DIR.parent / "learning_log"
-    log_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        return json.dumps(browse(node_id), ensure_ascii=False)
+    except (ValueError, OSError) as e:
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
 
-    filename = datetime.now().strftime("%Y%m%d_%H%M%S_%f") + ".md"
-    file_path = log_dir / filename
 
-    file_path.write_text(content, encoding="utf-8")
+def search_graph(query: str) -> str:
+    """資料を検索し、前後ページ・共通用語をたどって関連ページの本文と引用情報を返す。
 
-    return f"保存しました: learning_log/{filename}"
+    queryに調べたい内容を指定する。
+    """
+    import sqlite3
+    from google.genai.errors import APIError
+    from app.retrieval import search_graph as search
+
+    try:
+        return json.dumps(search(query), ensure_ascii=False)
+    except (ValueError, OSError, sqlite3.Error) as e:
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+    except APIError as e:
+        return json.dumps({"error": api_error_message(e.code)}, ensure_ascii=False)
